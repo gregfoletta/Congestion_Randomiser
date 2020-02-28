@@ -70,7 +70,6 @@ int listen_socket(int port) {
     return listening_fd;
 }
 
-
 #define MAX_THREADS 4096
 
 void connection_dispatch(int listening_fd, struct send_data *sd) {
@@ -78,38 +77,29 @@ void connection_dispatch(int listening_fd, struct send_data *sd) {
     struct sockaddr_storage their_addr;
     socklen_t addr_size = sizeof(their_addr);
     struct thread_args *args;
-    int i = 0, j;
+    int i = 0;
 
-    args = malloc(MAX_THREADS * sizeof(*args));
 
-    while (dispatch_loop && i < MAX_THREADS) {
+    while (dispatch_loop) {
         connection_fd = accept(listening_fd, (struct sockaddr *) &their_addr, &addr_size);
 
         if (errno == EINTR) {
-            printf("Interrupt\n");
             goto cleanup;
         }
 
-        printf("Received connection, allocating to ID %d\n", i);
+        args = malloc(sizeof(*args));
+        args->id = i;
+        args->fd = connection_fd;
+        args->d = sd;
 
-        args[i].id = i;
-        args[i].fd = connection_fd;
-        args[i].d = sd;
-        pthread_create(&args[i].tid, NULL, sending_thread, &args[i]);
-
+        // The thread detaches and then cleans up its own resources at the end.
+        // Have to check the interaction with SIGINT
+        pthread_create(&args->tid, NULL, sending_thread, args);
         i++;
     }
 
 cleanup:
     printf("SIGINT received - cleaning up\n");
-
-    free(args);
-
-    //Clean up the threads
-    for(j = 0; j < i; j++) {
-        pthread_join(args[j].tid, NULL);
-        printf("Cleaned up ID %d\n", j);
-    }
 
     close(listening_fd);
 
@@ -136,11 +126,18 @@ struct send_data *create_data(int length) {
 
 void *sending_thread(void *a) {
     struct thread_args *t_arg = a;
+    
+    pthread_detach(pthread_self());
+
+    printf("Sending on ID %d\n", t_arg->id);
 
     send(t_arg->fd, t_arg->d->data, t_arg->d->length, 0);
 
+    //The thread cleans up its own resources
+    // We don't free the actual data as its shared by all
+    // of the threads. We only free the send_data structure
     close(t_arg->fd);
-
+    free(t_arg);
 }
 
 
@@ -159,6 +156,7 @@ int main(int argc, char **argv) {
 
     connection_dispatch(listen_fd, send_data);
 
+    free(send_data->data);
     free(send_data);
 
     return 0;
