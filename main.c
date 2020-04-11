@@ -7,14 +7,15 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <signal.h>
+#include <getopt.h>
+
+#include <sys/time.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <netdb.h>
-
-#define DATA_LENGTH 1024 * 1024 * 1000
 
 struct send_data {
     char *data;
@@ -23,11 +24,16 @@ struct send_data {
 
 #define MAX_CNGST_ALGO 64
 
+#define ONE_MEGABYTE 1024*1024
+#define DEFAULT_SEND_SIZE 100 * ONE_MEGABYTE
+
+// Congestion algorithm storage.
 struct tcp_congest_algos {
     char *algos[MAX_CNGST_ALGO];
     int n;
 };
 
+// Structure passed to the dispatch thread.
 struct thread_args {
     int id;
     pthread_t tid;
@@ -45,8 +51,9 @@ struct send_data *create_data(int);
 
 struct tcp_congest_algos *congestion_algorithms(void);
 
+int timeval_subtract(struct timeval *, struct timeval *, struct timeval *);
 
-
+// Global dispatch loop variable and signal handler.
 int dispatch_loop = 1;
 
 void sigint_handler(int sig) {
@@ -56,15 +63,41 @@ void sigint_handler(int sig) {
 
 int main(int argc, char **argv) {
     int listen_fd;
+    int opt;
+    unsigned int send_data_size = DEFAULT_SEND_SIZE;
     struct send_data *send_data;
 
     srand(time(NULL));
 
-    sigaction(SIGINT, &(struct sigaction){sigint_handler}, NULL);
+    sigaction(SIGINT, &(struct sigaction){{sigint_handler}}, NULL);
 
+    //Parse the command line arguments
+    while (1) {
+
+        struct option long_options[] = {
+            { "size", required_argument, NULL, 's'},
+            { 0, 0, 0, 0 }
+        };
+
+        if ((opt = getopt_long(argc, argv, "s:", long_options, NULL)) == -1) {
+            break;
+        }
+
+        switch (opt) {
+        case 's':
+            send_data_size = (atoi(optarg) * ONE_MEGABYTE);
+            if (send_data_size == 0) {
+                send_data_size = DEFAULT_SEND_SIZE;
+            }
+        };
+    }
+
+    printf("- Send size set to %d KB\n", (send_data_size));
     listen_fd = listen_socket(9000);
+    printf("- Listening on port %d\n", 9000);
 
-    send_data = create_data(DATA_LENGTH);
+    send_data = create_data(send_data_size);
+    printf("- Send data allocated\n");
 
     connection_dispatch(listen_fd, send_data);
 
@@ -124,6 +157,7 @@ void connection_dispatch(int listening_fd, struct send_data *sd) {
     while (dispatch_loop) {
         connection_fd = accept(listening_fd, (struct sockaddr *) &their_addr, &addr_size);
 
+        // Did we get interrupted?
         if (errno == EINTR) {
             goto cleanup;
         }
@@ -172,10 +206,14 @@ void *sending_thread(void *a) {
     struct thread_args *t_arg = a;
     socklen_t cngst_algo_len;
     int ret;
-    
+    struct timeval start_time, end_time, elapsed_time;
+
     pthread_detach(pthread_self());
 
-    printf("Sending on ID %d, algorithm: %s\n", t_arg->id, t_arg->cngst_algorithm);
+    if (gettimeofday(&start_time, NULL) != 0) {
+        perror("Could not gettimeofday()");
+    }
+
 
     //Set the congestion algorithm
     cngst_algo_len = strlen(t_arg->cngst_algorithm) + 1;
@@ -184,18 +222,27 @@ void *sending_thread(void *a) {
         perror("setsockopt(): could not set congestion algorithm");
     }
 
-
-    //Send the congestion algorithm, including the null byte
+    
+    // Send the congestion algorithm, including the null byte,
+    // then send the data
     send(t_arg->fd, t_arg->cngst_algorithm, cngst_algo_len, 0);
-
-    //Send the data
     send(t_arg->fd, t_arg->d->data, t_arg->d->length, 0);
+
+    if (gettimeofday(&end_time, NULL) != 0) {
+        perror("Could not gettimeofday()");
+    }
+
+    timeval_subtract(&elapsed_time, &end_time, &start_time);        
+
+    printf("- [ID: %d,Algorithm: %s,Send time: %ld.%06ld]\n", t_arg->id, t_arg->cngst_algorithm, elapsed_time.tv_sec, elapsed_time.tv_usec);
 
     //The thread cleans up its own resources
     // We don't free the actual data as its shared by all
     // of the threads. We only free the send_data structure
     close(t_arg->fd);
     free(t_arg);
+
+    return NULL;
 }
 
 
@@ -223,13 +270,13 @@ struct tcp_congest_algos *congestion_algorithms(void) {
 
     return_algos = malloc(sizeof(*return_algos));
 
-    while( algorithm = strtok_r(strtok_save, " ", &strtok_save) ) {
+    while( (algorithm = strtok_r(strtok_save, " ", &strtok_save)) ) {
         if (i == MAX_CNGST_ALGO) {
             printf("Maximum congestion algorithms reached: %d\n", MAX_CNGST_ALGO);
             break;
         }
 
-        printf("Algorithm: %s (%p)\n", algorithm, algorithm);
+        printf("- Congestion Algorithm: %s\n", algorithm);
         return_algos->algos[i] = algorithm;
         i++;
     } 
@@ -241,3 +288,31 @@ struct tcp_congest_algos *congestion_algorithms(void) {
     return return_algos;
 }
 
+
+
+/* Subtract the ‘struct timeval’ values X and Y,
+   storing the result in RESULT.
+   Return 1 if the difference is negative, otherwise 0. */
+
+int timeval_subtract(struct timeval *result, struct timeval *x, struct timeval *y)
+{
+    /* Perform the carry for the later subtraction by updating y. */
+    if (x->tv_usec < y->tv_usec) {
+      int nsec = (y->tv_usec - x->tv_usec) / 1000000 + 1;
+      y->tv_usec -= 1000000 * nsec;
+      y->tv_sec += nsec;
+    }
+    if (x->tv_usec - y->tv_usec > 1000000) {
+      int nsec = (x->tv_usec - y->tv_usec) / 1000000;
+      y->tv_usec += 1000000 * nsec;
+      y->tv_sec -= nsec;
+    }
+
+    /* Compute the time remaining to wait.
+       tv_usec is certainly positive. */
+    result->tv_sec = x->tv_sec - y->tv_sec;
+    result->tv_usec = x->tv_usec - y->tv_usec;
+
+    /* Return 1 if result is negative. */
+    return x->tv_sec < y->tv_sec;
+}
