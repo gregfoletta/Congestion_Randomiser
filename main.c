@@ -20,8 +20,8 @@ struct send_data {
     unsigned int length;
 };
 
-#define ONE_MEGABYTE 1024*1024
-#define DEFAULT_SEND_SIZE 100 * ONE_MEGABYTE
+#define ONE_MEGABYTE (1024*1024LL)
+#define DEFAULT_SEND_SIZE (100 * ONE_MEGABYTE)
 
 #define MAX_CNGST_ALGO 64
 // Congestion algorithm storage.
@@ -50,7 +50,7 @@ int listen_socket();
 void connection_dispatch(int, struct send_data *);
 void *sending_thread(void *);
 
-struct send_data *create_data(int);
+struct send_data *create_data(const unsigned long long int);
 
 struct tcp_congest_algos *congestion_algorithms(void);
 
@@ -67,7 +67,7 @@ void sigint_handler(int sig) {
 int main(int argc, char **argv) {
     int listen_fd;
     int opt;
-    unsigned int send_data_size = DEFAULT_SEND_SIZE;
+    unsigned long int send_data_size = DEFAULT_SEND_SIZE;
     struct send_data *send_data;
 
     srand(time(NULL));
@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
     }
 
     // Set up the listening socket
-    printf("- Send size set to %d KB\n", (send_data_size));
+    printf("- Send size set to %llu MB\n", (send_data_size) / ONE_MEGABYTE);
     listen_fd = listen_socket();
     printf("- Listening on port %d\n", 9000);
 
@@ -220,7 +220,7 @@ cleanup:
  * returns - pointer to a struct send_data which contains a pointer to
  *  the data and the length of the data
  */    
-struct send_data *create_data(int length) {
+struct send_data *create_data(const unsigned long long int length) {
     char *data;
     struct send_data *sd;
 
