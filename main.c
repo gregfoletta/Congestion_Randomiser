@@ -1,5 +1,3 @@
-//#define  _GNU_SOURCE
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -22,18 +20,23 @@ struct send_data {
     unsigned int length;
 };
 
-#define MAX_CNGST_ALGO 64
-
 #define ONE_MEGABYTE 1024*1024
 #define DEFAULT_SEND_SIZE 100 * ONE_MEGABYTE
 
+#define MAX_CNGST_ALGO 64
 // Congestion algorithm storage.
 struct tcp_congest_algos {
     char *algos[MAX_CNGST_ALGO];
     int n;
 };
 
-// Structure passed to the dispatch thread.
+/* Structure passed to the dispatch thread.
+ * - id: local, application specific ID.
+ * - tid: thread ID.
+ * - fd: file descriptor of the client socket.
+ * - *d: pointer to the data to be send to the client.
+ * - *cngst_algorithm - the name of the congestion control algorithm to be used.
+ */
 struct thread_args {
     int id;
     pthread_t tid;
@@ -43,7 +46,7 @@ struct thread_args {
 };
 
 
-int listen_socket(int);
+int listen_socket();
 void connection_dispatch(int, struct send_data *);
 void *sending_thread(void *);
 
@@ -92,13 +95,18 @@ int main(int argc, char **argv) {
         };
     }
 
+    // Set up the listening socket
     printf("- Send size set to %d KB\n", (send_data_size));
-    listen_fd = listen_socket(9000);
+    listen_fd = listen_socket();
     printf("- Listening on port %d\n", 9000);
 
+    //Create the data to be sent to the client.
+    printf("- Allocating random data... ");
+    fflush(stdout);
     send_data = create_data(send_data_size);
-    printf("- Send data allocated\n");
+    printf("done\n");
 
+    //Accept connetions and dispatch to threads.
     connection_dispatch(listen_fd, send_data);
 
     free(send_data->data);
@@ -108,7 +116,15 @@ int main(int argc, char **argv) {
 }
 
 
-int listen_socket(int port) {
+/*
+ * listen_socket() - sets up the TCP listening socket on TCP port 9000
+ *
+ * TODO: make the port an argument.
+ *
+ * return - the TCP listener file descriptor
+ */
+#define TCP_LISTEN_PORT "9000"
+int listen_socket() {
     int listening_fd, ret;
     struct addrinfo hints, *res;
 
@@ -120,7 +136,7 @@ int listen_socket(int port) {
         .ai_flags = AI_PASSIVE
     };
 
-    getaddrinfo(NULL, "9000", &hints, &res);
+    getaddrinfo(NULL, TCP_LISTEN_PORT, &hints, &res);
 
     // Create the listening socket
     listening_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
@@ -143,6 +159,14 @@ int listen_socket(int port) {
 }
 
 
+/* 
+ * connection_dispatch() - accepts new incoming client connections to
+ * the listener and dispatches them to a new thread.
+ *
+ * listening_fd -   the file descriptor created by listen_socket()
+ * *sd -    a structure containing data and the length of the data that
+ *          will be sent by the thread
+ */
 void connection_dispatch(int listening_fd, struct send_data *sd) {
     int connection_fd;
     struct sockaddr_storage their_addr;
@@ -154,6 +178,7 @@ void connection_dispatch(int listening_fd, struct send_data *sd) {
     //Get our congestion algorithms, malloc performed in congestion_algorithms()
     c_algos = congestion_algorithms();
 
+    //Loop defined by global var which is set by signal handler.
     while (dispatch_loop) {
         connection_fd = accept(listening_fd, (struct sockaddr *) &their_addr, &addr_size);
 
@@ -162,6 +187,7 @@ void connection_dispatch(int listening_fd, struct send_data *sd) {
             goto cleanup;
         }
 
+        //Allocate and set the thread arguments
         args = malloc(sizeof(*args));
         args->id = i;
         args->fd = connection_fd;
@@ -185,6 +211,15 @@ cleanup:
 }
 
 
+/* 
+ * create_data() - allocates a block of memory and fills it with random
+ * data in the 'a-z' ASCII range
+ *
+ * length - the length of the block of data to create in bytes
+ *
+ * returns - pointer to a struct send_data which contains a pointer to
+ *  the data and the length of the data
+ */    
 struct send_data *create_data(int length) {
     char *data;
     struct send_data *sd;
@@ -202,12 +237,27 @@ struct send_data *create_data(int length) {
 }
 
 
+/*
+ * sending_thread() - function called by thread dispatch for every incoming client connection.
+ *
+ * a - a pointer to a struct thread_args which contins
+ *      - the application ID of the thread
+ *      - the pthread_t ID of the thread
+ *      - the file descriptor of the socket
+ *      - the struct send_data that will be sent to the client
+ *      - the name (char *) of the congestion algorithm that will be used.
+ *
+ * returns: nothing.
+ */
 void *sending_thread(void *a) {
     struct thread_args *t_arg = a;
     socklen_t cngst_algo_len;
     int ret;
     struct timeval start_time, end_time, elapsed_time;
 
+    // We don't need to join back up with the thread as we don't need
+    // anything returned from it. So we detach and let it clean itself
+    // up
     pthread_detach(pthread_self());
 
     if (gettimeofday(&start_time, NULL) != 0) {
@@ -223,7 +273,7 @@ void *sending_thread(void *a) {
     }
 
     
-    // Send the congestion algorithm, including the null byte,
+    // Send the congestion algorithm, including the null byte
     // then send the data
     send(t_arg->fd, t_arg->cngst_algorithm, cngst_algo_len, 0);
     send(t_arg->fd, t_arg->d->data, t_arg->d->length, 0);
@@ -247,7 +297,13 @@ void *sending_thread(void *a) {
 
 
 
-
+/*
+ * tcp_congest_algos() - returns a list of available TCP congestion
+ * algorithms
+ *
+ * returns: struct tcp_congest_algos, which has an array of char * for each of
+ * the algorithms, and the number of algorithms 'n'.
+ */
 struct tcp_congest_algos *congestion_algorithms(void) {
     FILE *available_cngst; 
     char *algorithms = NULL, *algorithm;
@@ -294,6 +350,12 @@ struct tcp_congest_algos *congestion_algorithms(void) {
    storing the result in RESULT.
    Return 1 if the difference is negative, otherwise 0. */
 
+/*
+ * timeval_subtract() - takes to struct timeval pointers and returns the differnce in
+ * the result parameter.
+ *
+ * returns: 1 if the result is negative
+ */
 int timeval_subtract(struct timeval *result, struct timeval *x, struct timeval *y)
 {
     /* Perform the carry for the later subtraction by updating y. */
