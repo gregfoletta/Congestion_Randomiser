@@ -2,7 +2,7 @@
 
 ## What is it?
 
-The multi-threaded server TCP server that uses randomly assigned congestion algorithms.
+The multi-threaded server TCP server sends data using randomly assigned congestion algorithms.
 
 ## How do I build it?
 
@@ -11,9 +11,25 @@ The multi-threaded server TCP server that uses randomly assigned congestion algo
 # gcc -Wall -pthread main.c -o cngst_rand
 ```
 
+## How do I call it?
+
+Defaults to 100Mb of data to send:
+```
+# ./cngst_ran
+```
+or set your own size (in Mb)
+```
+# ./cngst_rand --size 500
+```
+
+I generally use `parallel` and `netcat` to initiate connections. For example the following command initiates n parallel connections (where n is the number of CPU cores you have) up to a total of 60.
+```
+parallel -n0 nc -d localhost 9000 ::: {1..60} > /dev/null
+```
+
 ## How does it work?
 
-The process does initiall performs the following: 
+THe congestion randomiser works in the following way: 
 
 - Allocates a chunk of data in Mb based on the `--size` command line argument.
     - Defaults to 100Mb.
@@ -34,4 +50,5 @@ The process can be killed with a SIGINT. This terminates the dispatch loop and c
 
 ## Any gotchas?
 
-This build has been targeted to run on Linux. Won't work on any other operating system.
+- This build has been targeted to run on Linux. Won't work on any other operating system.
+- Needs further testing on other devices; if you see problems please raise an issue.
