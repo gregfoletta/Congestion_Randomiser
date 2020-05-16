@@ -25,6 +25,26 @@ or set your own size (in Mb)
 I generally use `parallel` and `netcat` to initiate connections. For example the following command initiates n parallel connections (where n is the number of CPU cores you have) up to a total of 60.
 ```
 parallel -n0 nc -d localhost 9000 ::: {1..60} > /dev/null
+
+## Can you show me some output?
+
+Sure:
+
+```
+ % ./cngst_rand 
+- Send size set to 100 MB
+- Listening on port 9000
+- Allocating random data... done
+- Congestion Algorithm: reno
+- Congestion Algorithm: cubic
+- [ID: 2, Algorithm: reno, Send time: 0.232096]
+- [ID: 0, Algorithm: cubic, Send time: 0.276508]
+- [ID: 3, Algorithm: cubic, Send time: 0.281984]
+- [ID: 1, Algorithm: cubic, Send time: 0.311223]
+- [ID: 4, Algorithm: reno, Send time: 0.302720]
+^CSIGINT received - cleaning up
+```
+
 ```
 
 ## How does it work?
