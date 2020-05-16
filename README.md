@@ -15,7 +15,7 @@ The multi-threaded server TCP server sends data using randomly assigned congesti
 
 Defaults to 100Mb of data to send:
 ```
-# ./cngst_ran
+# ./cngst_rand
 ```
 or set your own size (in Mb)
 ```
